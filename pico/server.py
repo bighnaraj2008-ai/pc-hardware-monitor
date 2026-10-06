@@ -109,6 +109,57 @@ def connect_wifi(
     return ip_info[0]
 
 
+def parse_http_request(client_sock):
+    """
+    Reads and parses incoming HTTP stream into method, path, headers, and decoded JSON body.
+    """
+    request_data = b""
+    while b"\r\n\r\n" not in request_data:
+        chunk = client_sock.recv(512)
+        if not chunk:
+            break
+        request_data += chunk
+
+    if not request_data:
+        return None, None, {}, None
+
+    header_bytes, body_bytes = request_data.split(b"\r\n\r\n", 1)
+    header_lines = header_bytes.decode("utf-8", "ignore").split("\r\n")
+
+    if not header_lines or not header_lines[0]:
+        return None, None, {}, None
+
+    request_tokens = header_lines[0].split(" ")
+    if len(request_tokens) < 2:
+        return None, None, {}, None
+
+    method = request_tokens[0].upper()
+    path = request_tokens[1]
+
+    headers = {}
+    for line in header_lines[1:]:
+        if ":" in line:
+            key, val = line.split(":", 1)
+            headers[key.strip().lower()] = val.strip()
+
+    content_length = int(headers.get("content-length", 0))
+    while len(body_bytes) < content_length:
+        needed = content_length - len(body_bytes)
+        chunk = client_sock.recv(min(needed, 512))
+        if not chunk:
+            break
+        body_bytes += chunk
+
+    json_payload = None
+    if body_bytes:
+        try:
+            json_payload = json.loads(body_bytes.decode("utf-8", "ignore"))
+        except Exception as e:
+            print(f"Failed to decode JSON payload: {e}")
+
+    return method, path, headers, json_payload
+
+
 def build_response(status_code: int, status_text: str, data: dict) -> bytes:
     """Construct an HTTP response packet with JSON body."""
     body_str = json.dumps(data)
@@ -143,6 +194,36 @@ def start_server(host: str = "0.0.0.0", port: int = SERVER_PORT):
             try:
                 client_sock, client_addr = server_sock.accept()
                 client_sock.settimeout(5.0)
+
+                method, path, headers, payload = parse_http_request(client_sock)
+                if not method:
+                    continue
+
+                if method == "POST" and path == "/api/metrics":
+                    if payload and isinstance(payload, dict):
+                        response = build_response(200, "OK", {
+                            "status": "success",
+                            "message": "Telemetry metrics received",
+                            "timestamp": time.time()
+                        })
+                    else:
+                        response = build_response(400, "Bad Request", {
+                            "status": "error",
+                            "message": "Invalid or missing JSON payload"
+                        })
+                elif method == "GET" and path in ("/", "/health"):
+                    response = build_response(200, "OK", {
+                        "status": "online",
+                        "free_memory_bytes": gc.mem_free(),
+                        "time": time.time()
+                    })
+                else:
+                    response = build_response(404, "Not Found", {
+                        "status": "error",
+                        "message": f"Resource {path} not found"
+                    })
+
+                client_sock.sendall(response)
 
             except Exception as e:
                 print(f"Error servicing request: {e}")
