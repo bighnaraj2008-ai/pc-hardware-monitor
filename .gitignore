@@ -2,11 +2,15 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
 
-# C extensions
+# C extensions & Binaries
 *.so
+*.exe
+*.o
+*.class
 
-# Distribution / packaging
+# Distribution / packaging & Build artifacts
 .Python
 build/
 develop-eggs/
@@ -25,6 +29,10 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+target/
+coverage/
+.pio/
+node_modules/
 
 # Virtual environments
 venv/
@@ -35,9 +43,31 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDE and Editor configurations
+# Environment and Secret files
+.env
+.env.*
+!.env.example
+pc/config.json
+pico/config.py
+pico/config.py.local
+include/config.h
+
+# Database & Runtime artifacts
+*.db
+*.sqlite
+*.sqlite3
+*.log
+can_log.csv
+
+# IDE and Agent configurations
 .vscode/
 .idea/
+.antigravity/
+.cursor/
+.claude/
+.settings/
+.classpath
+.project
 *.sublime-project
 *.sublime-workspace
 *.swp
@@ -49,7 +79,3 @@ venv.bak/
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
-
-# Local sensitive configuration files
-pc/config.json
-pico/config.py.local
