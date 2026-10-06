@@ -38,6 +38,26 @@ except ImportError:
     STATIC_IP_CONFIG = None
 
 # Hardware LED setup
+def indicate_reception_success():
+    """Toggle onboard LED to provide visual pulse feedback upon receiving valid telemetry."""
+    if not led or not ENABLE_LED_INDICATOR:
+        return
+    current_state = led.value()
+    led.value(0 if current_state else 1)
+    time.sleep_ms(60)
+    led.value(current_state)
+
+
+def indicate_error():
+    """Flash onboard LED rapidly to signal a rejected request or parsing failure."""
+    if not led or not ENABLE_LED_INDICATOR:
+        return
+    for _ in range(3):
+        led.value(0)
+        time.sleep_ms(40)
+        led.value(1)
+        time.sleep_ms(40)
+
 try:
     led = machine.Pin("LED", machine.Pin.OUT)
 except Exception:
@@ -201,12 +221,14 @@ def start_server(host: str = "0.0.0.0", port: int = SERVER_PORT):
 
                 if method == "POST" and path == "/api/metrics":
                     if payload and isinstance(payload, dict):
+                        indicate_reception_success()
                         response = build_response(200, "OK", {
                             "status": "success",
                             "message": "Telemetry metrics received",
                             "timestamp": time.time()
                         })
                     else:
+                        indicate_error()
                         response = build_response(400, "Bad Request", {
                             "status": "error",
                             "message": "Invalid or missing JSON payload"
@@ -227,6 +249,7 @@ def start_server(host: str = "0.0.0.0", port: int = SERVER_PORT):
 
             except Exception as e:
                 print(f"Error servicing request: {e}")
+                indicate_error()
             finally:
                 if client_sock:
                     try:
