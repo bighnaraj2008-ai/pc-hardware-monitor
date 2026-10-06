@@ -285,3 +285,61 @@ def format_payload_json(
 ) -> str:
     """Format and serialize telemetry payload to compact JSON string."""
     return json.dumps(format_payload(cpu_metrics, ram_metrics, gpu_metrics), separators=(",", ":"))
+
+
+class HttpTransmitter:
+    """Handles HTTP POST transmissions of telemetry data with error handling and retry logic."""
+
+    def __init__(self, target_url: str, timeout: float = 3.0):
+        self.target_url = target_url
+        self.timeout = timeout
+        self.session = requests.Session() if requests else None
+        self.headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "PCHardwareMonitor/1.0"
+        }
+
+    def send(self, payload: Dict[str, Any]) -> bool:
+        """Transmit payload via HTTP POST to the Pico W server."""
+        if not requests or not self.session:
+            logger.error("requests library is not installed. Cannot transmit payload.")
+            return False
+
+        json_data = json.dumps(payload, separators=(",", ":"))
+        start_time = time.perf_counter()
+
+        try:
+            response = self.session.post(
+                self.target_url,
+                data=json_data,
+                headers=self.headers,
+                timeout=self.timeout
+            )
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 1)
+
+            if response.status_code == 200:
+                logger.info(f"POST {self.target_url} -> 200 OK ({elapsed_ms}ms)")
+                return True
+            else:
+                logger.warning(
+                    f"POST {self.target_url} -> HTTP {response.status_code} ({elapsed_ms}ms): {response.text.strip()}"
+                )
+                return False
+
+        except requests.exceptions.ConnectTimeout:
+            logger.error(f"Connection timeout reaching Pico W at {self.target_url} (limit: {self.timeout}s)")
+        except requests.exceptions.ReadTimeout:
+            logger.error(f"Read timeout waiting for Pico W response at {self.target_url} (limit: {self.timeout}s)")
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error reaching Pico W at {self.target_url}: {e}")
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error during transmission: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Unexpected network error during transmission: {e}")
+
+        return False
+
+    def close(self):
+        """Clean up active HTTP session connections."""
+        if self.session:
+            self.session.close()
