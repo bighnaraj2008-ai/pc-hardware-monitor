@@ -238,3 +238,50 @@ class HardwareReader:
             "memory_percent": None,
             "temp_c": None
         }
+
+
+def format_payload(
+    cpu_metrics: Dict[str, Any],
+    ram_metrics: Dict[str, Any],
+    gpu_metrics: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Format collected telemetry into a standardized, compact dictionary payload for transmission."""
+    boot_time = psutil.boot_time() if psutil else time.time()
+    uptime_seconds = int(time.time() - boot_time)
+
+    payload = {
+        "timestamp": int(time.time()),
+        "hostname": platform.node(),
+        "uptime": uptime_seconds,
+        "cpu": {
+            "usage": float(cpu_metrics.get("usage_percent", 0.0) or 0.0),
+            "temp": cpu_metrics.get("temp_c"),
+            "freq": cpu_metrics.get("freq_mhz"),
+            "cores": cpu_metrics.get("cores_logical", 1)
+        },
+        "ram": {
+            "usage": float(ram_metrics.get("usage_percent", 0.0) or 0.0),
+            "used_gb": float(ram_metrics.get("used_gb", 0.0) or 0.0),
+            "total_gb": float(ram_metrics.get("total_gb", 0.0) or 0.0),
+            "free_gb": float(ram_metrics.get("free_gb", 0.0) or 0.0)
+        },
+        "gpu": {
+            "detected": bool(gpu_metrics.get("detected", False)),
+            "name": str(gpu_metrics.get("name", "N/A")),
+            "usage": gpu_metrics.get("usage_percent"),
+            "temp": gpu_metrics.get("temp_c"),
+            "mem_usage": gpu_metrics.get("memory_percent"),
+            "mem_used_mb": gpu_metrics.get("memory_used_mb"),
+            "mem_total_mb": gpu_metrics.get("memory_total_mb")
+        }
+    }
+    return payload
+
+
+def format_payload_json(
+    cpu_metrics: Dict[str, Any],
+    ram_metrics: Dict[str, Any],
+    gpu_metrics: Dict[str, Any]
+) -> str:
+    """Format and serialize telemetry payload to compact JSON string."""
+    return json.dumps(format_payload(cpu_metrics, ram_metrics, gpu_metrics), separators=(",", ":"))
