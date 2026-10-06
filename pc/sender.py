@@ -39,36 +39,6 @@ logging.basicConfig(
 logger = logging.getLogger("pc-monitor")
 
 
-def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """Load configuration from JSON file with sensible default fallbacks."""
-    default_config = {
-        "pico_ip": "192.168.1.105",
-        "pico_port": 80,
-        "endpoint": "/api/metrics",
-        "polling_interval_seconds": 2.0,
-        "request_timeout_seconds": 3.0
-    }
-
-    candidates = [
-        config_path,
-        os.path.join(os.path.dirname(__file__), "config.json"),
-        os.path.join(os.path.dirname(__file__), "config.template.json")
-    ]
-
-    for path in candidates:
-        if path and os.path.isfile(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    default_config.update(data)
-                    logger.debug(f"Loaded configuration from {path}")
-                    break
-            except Exception as e:
-                logger.warning(f"Failed to parse config file at {path}: {e}")
-
-    return default_config
-
-
 class HardwareReader:
     """Reads system performance metrics including CPU, RAM, and GPU."""
 
@@ -343,3 +313,179 @@ class HttpTransmitter:
         """Clean up active HTTP session connections."""
         if self.session:
             self.session.close()
+
+
+def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load configuration from JSON file with sensible default fallbacks."""
+    default_config = {
+        "pico_ip": "192.168.1.105",
+        "pico_port": 80,
+        "endpoint": "/api/metrics",
+        "polling_interval_seconds": 2.0,
+        "request_timeout_seconds": 3.0
+    }
+
+    candidates = [
+        config_path,
+        os.path.join(os.path.dirname(__file__), "config.json"),
+        os.path.join(os.path.dirname(__file__), "config.template.json")
+    ]
+
+    for path in candidates:
+        if path and os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    default_config.update(data)
+                    logger.debug(f"Loaded configuration from {path}")
+                    break
+            except Exception as e:
+                logger.warning(f"Failed to parse config file at {path}: {e}")
+
+    return default_config
+
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse command-line options and flags."""
+    parser = argparse.ArgumentParser(
+        description="PC Hardware Monitor - Real-time telemetry sender for Raspberry Pi Pico W"
+    )
+    parser.add_argument(
+        "--config", "-c",
+        type=str,
+        default=None,
+        help="Path to JSON configuration file"
+    )
+    parser.add_argument(
+        "--ip",
+        type=str,
+        default=None,
+        help="Raspberry Pi Pico W IP address (overrides config)"
+    )
+    parser.add_argument(
+        "--port", "-p",
+        type=int,
+        default=None,
+        help="Target HTTP server port on Pico W (default: 80)"
+    )
+    parser.add_argument(
+        "--endpoint",
+        type=str,
+        default=None,
+        help="Target API endpoint route (default: /api/metrics)"
+    )
+    parser.add_argument(
+        "--interval", "-i",
+        type=float,
+        default=None,
+        help="Telemetry polling and broadcast interval in seconds (default: 2.0)"
+    )
+    parser.add_argument(
+        "--timeout", "-t",
+        type=float,
+        default=None,
+        help="HTTP request connection and read timeout in seconds (default: 3.0)"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Collect and print telemetry metrics without sending network requests"
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Poll and transmit a single metric packet, then exit"
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose debug logging"
+    )
+    return parser.parse_args()
+
+
+def main():
+    """Main execution loop for continuous hardware telemetry collection and dispatch."""
+    args = parse_arguments()
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+
+    cfg = load_config(args.config)
+
+    # CLI arguments override JSON config values
+    target_ip = args.ip or cfg.get("pico_ip", "192.168.1.105")
+    target_port = args.port or cfg.get("pico_port", 80)
+    endpoint = args.endpoint or cfg.get("endpoint", "/api/metrics")
+    interval = args.interval or cfg.get("polling_interval_seconds", 2.0)
+    timeout = args.timeout or cfg.get("request_timeout_seconds", 3.0)
+
+    target_url = f"http://{target_ip}:{target_port}{endpoint}"
+
+    logger.info("=========================================")
+    logger.info("   PC Hardware Monitor - Sender Daemon   ")
+    logger.info("=========================================")
+    logger.info(f"Target URL:        {target_url}")
+    logger.info(f"Polling Interval:  {interval}s")
+    logger.info(f"Request Timeout:   {timeout}s")
+    logger.info(f"Dry Run Mode:      {args.dry_run}")
+    logger.info("Press Ctrl+C to terminate sender daemon.\n")
+
+    reader = HardwareReader()
+    transmitter = HttpTransmitter(target_url, timeout=timeout) if not args.dry_run else None
+
+    # Warm-up psutil cpu_percent (first call returns 0.0)
+    if psutil:
+        psutil.cpu_percent(interval=None)
+
+    iteration = 0
+    try:
+        while True:
+            iteration += 1
+            start_loop = time.time()
+
+            cpu = reader.get_cpu_metrics()
+            ram = reader.get_ram_metrics()
+            gpu = reader.get_gpu_metrics()
+            payload = format_payload(cpu, ram, gpu)
+
+            cpu_info = f"CPU: {payload['cpu']['usage']}%"
+            if payload['cpu']['temp'] is not None:
+                cpu_info += f" ({payload['cpu']['temp']}°C)"
+
+            ram_info = f"RAM: {payload['ram']['usage']}% ({payload['ram']['used_gb']}/{payload['ram']['total_gb']}GB)"
+
+            gpu_info = "GPU: N/A"
+            if payload['gpu']['detected']:
+                gpu_usage = f"{payload['gpu']['usage']}%" if payload['gpu']['usage'] is not None else "Active"
+                gpu_info = f"GPU: {gpu_usage}"
+                if payload['gpu']['temp'] is not None:
+                    gpu_info += f" ({payload['gpu']['temp']}°C)"
+
+            logger.info(f"[#{iteration:04d}] {cpu_info} | {ram_info} | {gpu_info}")
+
+            if args.dry_run:
+                print(json.dumps(payload, indent=2))
+            else:
+                if transmitter:
+                    transmitter.send(payload)
+
+            if args.once:
+                logger.info("Completed single run iteration (--once). Exiting cleanly.")
+                break
+
+            # Calculate remaining sleep time to maintain steady interval
+            elapsed = time.time() - start_loop
+            sleep_time = max(0.0, interval - elapsed)
+            time.sleep(sleep_time)
+
+    except KeyboardInterrupt:
+        logger.info("\nSender interrupted by user (SIGINT). Shutting down cleanly...")
+    finally:
+        if transmitter:
+            transmitter.close()
+        logger.info("PC sender shutdown complete.")
+
+
+if __name__ == "__main__":
+    main()
