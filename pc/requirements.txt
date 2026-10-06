@@ -1,0 +1,5 @@
+# Core telemetry and network dependencies for PC sender script
+psutil>=5.9.0
+requests>=2.31.0
+WMI>=1.5.1
+pywin32>=306; sys_platform == 'win32'
