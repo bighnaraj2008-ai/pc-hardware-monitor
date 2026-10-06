@@ -107,3 +107,62 @@ def connect_wifi(
     print("----------------------------------------")
 
     return ip_info[0]
+
+
+def build_response(status_code: int, status_text: str, data: dict) -> bytes:
+    """Construct an HTTP response packet with JSON body."""
+    body_str = json.dumps(data)
+    body_bytes = body_str.encode("utf-8")
+    header_str = (
+        f"HTTP/1.1 {status_code} {status_text}\r\n"
+        "Content-Type: application/json\r\n"
+        f"Content-Length: {len(body_bytes)}\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    )
+    return header_str.encode("utf-8") + body_bytes
+
+
+def start_server(host: str = "0.0.0.0", port: int = SERVER_PORT):
+    """
+    Initializes lightweight socket server and listens for incoming HTTP connections.
+    """
+    addr = (host, port)
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    try:
+        server_sock.bind(addr)
+        server_sock.listen(2)
+        print(f"Socket server listening on {host}:{port}...")
+
+        while True:
+            gc.collect()
+
+            client_sock = None
+            try:
+                client_sock, client_addr = server_sock.accept()
+                client_sock.settimeout(5.0)
+
+            except Exception as e:
+                print(f"Error servicing request: {e}")
+            finally:
+                if client_sock:
+                    try:
+                        client_sock.close()
+                    except Exception:
+                        pass
+
+    except KeyboardInterrupt:
+        print("\nServer stopped by user.")
+    finally:
+        server_sock.close()
+        print("Socket server closed.")
+
+
+if __name__ == "__main__":
+    try:
+        assigned_ip = connect_wifi()
+        start_server(host="0.0.0.0", port=SERVER_PORT)
+    except Exception as err:
+        print(f"Fatal server error: {err}")
