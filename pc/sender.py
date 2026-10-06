@@ -146,3 +146,95 @@ class HardwareReader:
             "swap_used_gb": round(swap.used / (1024 ** 3), 2),
             "swap_percent": swap.percent
         }
+
+    def get_gpu_metrics(self) -> Dict[str, Any]:
+        """Parse GPU hardware telemetry using nvidia-smi with WMI fallback."""
+        # 1. Try querying NVIDIA Management Interface (nvidia-smi)
+        if self._has_nvidia_smi:
+            try:
+                cmd = [
+                    "nvidia-smi",
+                    "--query-gpu=name,utilization.gpu,utilization.memory,memory.total,memory.used,temperature.gpu",
+                    "--format=csv,noheader,nounits"
+                ]
+                output = subprocess.check_output(cmd, encoding="utf-8", stderr=subprocess.DEVNULL)
+                lines = [line.strip() for line in output.strip().splitlines() if line.strip()]
+                if lines:
+                    parts = [p.strip() for p in lines[0].split(",")]
+                    if len(parts) >= 6:
+                        gpu_name = parts[0]
+                        gpu_util = float(parts[1]) if parts[1].replace(".", "", 1).isdigit() else 0.0
+                        mem_total_mb = float(parts[3]) if parts[3].replace(".", "", 1).isdigit() else 0.0
+                        mem_used_mb = float(parts[4]) if parts[4].replace(".", "", 1).isdigit() else 0.0
+                        gpu_temp = float(parts[5]) if parts[5].replace(".", "", 1).isdigit() else None
+                        mem_percent = round((mem_used_mb / mem_total_mb * 100), 1) if mem_total_mb > 0 else 0.0
+
+                        return {
+                            "detected": True,
+                            "name": gpu_name,
+                            "usage_percent": gpu_util,
+                            "memory_used_mb": mem_used_mb,
+                            "memory_total_mb": mem_total_mb,
+                            "memory_percent": mem_percent,
+                            "temp_c": gpu_temp
+                        }
+            except Exception as e:
+                logger.debug(f"nvidia-smi query failed: {e}")
+
+        # 2. Check OpenHardwareMonitor / LibreHardwareMonitor sensors if active
+        if sys.platform == "win32" and wmi is not None:
+            try:
+                w_ohm = wmi.WMI(namespace="root\\OpenHardwareMonitor")
+                sensors = w_ohm.Sensor()
+                gpu_load = None
+                gpu_temp = None
+                for s in sensors:
+                    if "GPU" in s.Name:
+                        if s.SensorType == "Load" and "Core" in s.Name:
+                            gpu_load = round(float(s.Value), 1)
+                        elif s.SensorType == "Temperature" and "Core" in s.Name:
+                            gpu_temp = round(float(s.Value), 1)
+
+                if gpu_load is not None or gpu_temp is not None:
+                    return {
+                        "detected": True,
+                        "name": "Discrete GPU",
+                        "usage_percent": gpu_load if gpu_load is not None else 0.0,
+                        "memory_used_mb": None,
+                        "memory_total_mb": None,
+                        "memory_percent": None,
+                        "temp_c": gpu_temp
+                    }
+            except Exception:
+                pass
+
+        # 3. Fallback to Windows WMI Video Controller query
+        if self._wmi_obj:
+            try:
+                controllers = self._wmi_obj.Win32_VideoController()
+                if controllers:
+                    primary_gpu = controllers[0]
+                    gpu_name = getattr(primary_gpu, "Name", "Unknown GPU")
+                    raw_ram = getattr(primary_gpu, "AdapterRAM", 0)
+                    total_ram_mb = round(int(raw_ram) / (1024 ** 2), 1) if raw_ram else None
+                    return {
+                        "detected": True,
+                        "name": gpu_name,
+                        "usage_percent": None,
+                        "memory_used_mb": None,
+                        "memory_total_mb": total_ram_mb,
+                        "memory_percent": None,
+                        "temp_c": None
+                    }
+            except Exception as e:
+                logger.debug(f"WMI video controller lookup failed: {e}")
+
+        return {
+            "detected": False,
+            "name": "N/A",
+            "usage_percent": None,
+            "memory_used_mb": None,
+            "memory_total_mb": None,
+            "memory_percent": None,
+            "temp_c": None
+        }
