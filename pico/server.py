@@ -5,15 +5,19 @@ Receives real-time PC hardware metrics and processes payloads.
 
 import gc
 import time
+# pyrefly: ignore [missing-import]
 import network
+# pyrefly: ignore [missing-import]
 import machine
 
 try:
+    # pyrefly: ignore [missing-import]
     import ujson as json
 except ImportError:
     import json
 
 try:
+    # pyrefly: ignore [missing-import]
     import usocket as socket
 except ImportError:
     import socket
@@ -38,6 +42,83 @@ except ImportError:
     STATIC_IP_CONFIG = None
 
 # Hardware LED setup
+try:
+    led = machine.Pin("LED", machine.Pin.OUT)
+except Exception:
+    try:
+        led = machine.Pin(25, machine.Pin.OUT)
+    except Exception:
+        led = None
+
+# Telemetry session state
+packet_counter = 0
+boot_start_time = time.time()
+
+
+def render_progress_bar(percent: float, width: int = 10) -> str:
+    """Create a compact ASCII progress bar for console telemetry visualization."""
+    if percent is None:
+        return "[" + " " * width + "]"
+    clamped = max(0.0, min(100.0, float(percent)))
+    filled = int(round((clamped / 100.0) * width))
+    bar = "#" * filled + "-" * (width - filled)
+    return f"[{bar}]"
+
+
+def display_telemetry_dashboard(payload: dict, client_ip: str):
+    """
+    Renders a formatted real-time telemetry dashboard in the Pico REPL console.
+    """
+    global packet_counter
+    packet_counter += 1
+
+    if not ENABLE_SERIAL_LOGGING:
+        return
+
+    hostname = payload.get("hostname", "PC")
+    cpu = payload.get("cpu", {})
+    ram = payload.get("ram", {})
+    gpu = payload.get("gpu", {})
+
+    cpu_usage = cpu.get("usage", 0.0)
+    cpu_temp = cpu.get("temp")
+    cpu_freq = cpu.get("freq")
+    cpu_cores = cpu.get("cores", 1)
+
+    ram_usage = ram.get("usage", 0.0)
+    ram_used = ram.get("used_gb", 0.0)
+    ram_total = ram.get("total_gb", 0.0)
+
+    gpu_detected = gpu.get("detected", False)
+    gpu_name = gpu.get("name", "N/A")
+    gpu_usage = gpu.get("usage")
+    gpu_temp = gpu.get("temp")
+    gpu_mem_used = gpu.get("mem_used_mb")
+    gpu_mem_total = gpu.get("mem_total_mb")
+
+    temp_str = f"{cpu_temp}°C" if cpu_temp is not None else "--.-°C"
+    freq_str = f"{cpu_freq}MHz" if cpu_freq is not None else "---MHz"
+
+    print("\n" + "=" * 56)
+    print(f" [#{packet_counter:05d}] TELEMETRY | Host: {hostname} ({client_ip})")
+    print("-" * 56)
+    print(f" CPU: {render_progress_bar(cpu_usage)} {cpu_usage:5.1f}% | {temp_str} | {freq_str} ({cpu_cores}C)")
+    print(f" RAM: {render_progress_bar(ram_usage)} {ram_usage:5.1f}% | {ram_used:.1f} / {ram_total:.1f} GB")
+
+    if gpu_detected:
+        gpu_u_str = f"{gpu_usage:5.1f}%" if gpu_usage is not None else "  N/A "
+        gpu_t_str = f"{gpu_temp}°C" if gpu_temp is not None else "--.-°C"
+        gpu_bar = render_progress_bar(gpu_usage if gpu_usage is not None else 0.0)
+        gpu_mem_str = f"{gpu_mem_used:.0f}/{gpu_mem_total:.0f}MB" if gpu_mem_used and gpu_mem_total else ""
+        print(f" GPU: {gpu_bar} {gpu_u_str} | {gpu_t_str} | {gpu_name[:16]} {gpu_mem_str}")
+    else:
+        print(" GPU: [----------]   N/A  | Not Detected")
+
+    uptime_s = time.time() - boot_start_time
+    print(f" PICO: Heap Free: {gc.mem_free()} B | Server Uptime: {uptime_s}s")
+    print("=" * 56)
+
+
 def indicate_reception_success():
     """Toggle onboard LED to provide visual pulse feedback upon receiving valid telemetry."""
     if not led or not ENABLE_LED_INDICATOR:
@@ -57,14 +138,6 @@ def indicate_error():
         time.sleep_ms(40)
         led.value(1)
         time.sleep_ms(40)
-
-try:
-    led = machine.Pin("LED", machine.Pin.OUT)
-except Exception:
-    try:
-        led = machine.Pin(25, machine.Pin.OUT)
-    except Exception:
-        led = None
 
 
 def connect_wifi(
@@ -221,11 +294,17 @@ def start_server(host: str = "0.0.0.0", port: int = SERVER_PORT):
 
                 if method == "POST" and path == "/api/metrics":
                     if payload and isinstance(payload, dict):
+                        # Visual LED pulse feedback indicating valid packet reception
                         indicate_reception_success()
+
+                        # Output formatted telemetry dashboard to REPL console
+                        display_telemetry_dashboard(payload, client_addr[0])
+
                         response = build_response(200, "OK", {
                             "status": "success",
                             "message": "Telemetry metrics received",
-                            "timestamp": time.time()
+                            "timestamp": time.time(),
+                            "packets_processed": packet_counter
                         })
                     else:
                         indicate_error()
@@ -237,7 +316,8 @@ def start_server(host: str = "0.0.0.0", port: int = SERVER_PORT):
                     response = build_response(200, "OK", {
                         "status": "online",
                         "free_memory_bytes": gc.mem_free(),
-                        "time": time.time()
+                        "time": time.time(),
+                        "packets_processed": packet_counter
                     })
                 else:
                     response = build_response(404, "Not Found", {
